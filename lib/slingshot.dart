@@ -1,103 +1,113 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter/scheduler.dart';
+import 'package:flame/game.dart';
+import 'package:flame_forge2d/flame_forge2d.dart';  // 提供 Vector2
+import 'package:flutter/scheduler.dart' show Ticker;
 
 import 'world.dart';
-import 'physics.dart';
+import 'bird.dart';
+import 'menu.dart';
+import 'trajectory_helper.dart';
+import 'consts.dart';
 
 class SlingshotGamePage extends StatefulWidget {
+  const SlingshotGamePage({super.key, required this.levelIndex});
   final int levelIndex;
-  const SlingshotGamePage({super.key, this.levelIndex = 1});
 
   @override
   State<SlingshotGamePage> createState() => _SlingshotGamePageState();
 }
 
 class _SlingshotGamePageState extends State<SlingshotGamePage>
-    with SingleTickerProviderStateMixin {
-  late final Ticker _ticker;
-  Duration _last = Duration.zero;
+    with TickerProviderStateMixin {
+  late AngryWorld world;
+  late Ticker _ticker;
+  Timer? _countdown;
+  int _timeLeft = 60;
 
-  final GameWorld _world = GameWorld();
-  late _GamePainter _painter;
-
-  bool _dragging = false;
-  Vec2? _dragPoint;
-  bool _initialized = false;
-  Size _lastSize = Size.zero;
+  Vector2? _dragPointWorld; // 拖拽点（米）
+  Vector2? _dragPointScreen; // 拖拽点（像素）
 
   @override
   void initState() {
     super.initState();
-    _painter = _GamePainter(_world);
-    _ticker = createTicker(_onTick)..start();
+
+    world = AngryWorld();
+
+    // 游戏循环
+    _ticker = createTicker((_) {
+      setState(() {
+        world.updateTree(1 / 60);
+        world.camCtrl.update(1 / 60);
+      });
+      if (_timeLeft <= 0) _endGame();
+    })..start();
+
+    // 倒计时
+    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_timeLeft <= 0) {
+        _endGame();
+        return;
+      }
+      setState(() => _timeLeft -= 1);
+    });
+  }
+
+  void _restart() {
+    _countdown?.cancel();
+    setState(() {
+      world = AngryWorld();
+      _timeLeft = 60;
+      _dragPointWorld = null;
+    });
+    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (_timeLeft <= 0) {
+        _endGame();
+        return;
+      }
+      setState(() => _timeLeft -= 1);
+    });
+  }
+
+  void _endGame() {
+    _countdown?.cancel();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Time Up'),
+        content: Text('Score: ${world.score}'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _restart();
+            },
+            child: const Text('Restart'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const MenuPage()),
+                    (r) => false,
+              );
+            },
+            child: const Text('Home'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   void dispose() {
     _ticker.dispose();
+    _countdown?.cancel();
     super.dispose();
-  }
-
-  void _onTick(Duration now) {
-    if (!_initialized) return;
-    final dt = _last == Duration.zero
-        ? 1 / 60.0
-        : (now - _last).inMicroseconds / 1e6;
-    _last = now;
-
-    _world.tick(dt: dt, isDragging: _dragging, dragPoint: _dragPoint);
-    if (mounted) setState(() {});
-  }
-
-  void _ensureInit(Size size) {
-    if (_initialized) return;
-    _lastSize = size;
-    _world.init(width: size.width, height: size.height);
-    _initialized = true;
-  }
-
-  // 拖拽发射
-  void _onPanStart(DragStartDetails d) {
-    if (_world.canShoot) {
-      _dragging = true;
-      _dragPoint = Vec2(d.localPosition.dx, d.localPosition.dy);
-    }
-  }
-
-  void _onPanUpdate(DragUpdateDetails d) {
-    if (!_dragging) return;
-    _dragPoint = Vec2(d.localPosition.dx, d.localPosition.dy);
-  }
-
-  void _onPanEnd(DragEndDetails d) {
-    if (!_dragging) return;
-    _dragging = false;
-    final (release, v0) = _world.computeReleaseAndVelocity(_dragPoint);
-    _world.applyLaunch(release, v0);
-    _dragPoint = null;
-  }
-
-  // 结算按钮点击 或 双击触发技能
-  void _onTapUp(TapUpDetails d) {
-    if (_world.status == LevelStatus.playing) return;
-    final p = d.localPosition;
-
-    if (_painter.nextButtonRect?.contains(p) == true) {
-      _world.init(width: _lastSize.width, height: _lastSize.height); // 重开当前关
-      setState(() {});
-      return;
-    }
-    if (_painter.homeButtonRect?.contains(p) == true) {
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
-      return;
-    }
-  }
-
-  void _onDoubleTap() {
-    // 飞行中触发技能
-    _world.triggerAbility();
   }
 
   @override
@@ -105,228 +115,133 @@ class _SlingshotGamePageState extends State<SlingshotGamePage>
     return Scaffold(
       backgroundColor: const Color(0xFF0F1114),
       body: SafeArea(
-        child: LayoutBuilder(builder: (context, c) {
-          final size = Size(c.maxWidth, c.maxHeight);
-          _lastSize = size;
-          _ensureInit(size);
+        child: Stack(
+          children: [
+            GestureDetector(
+              onPanUpdate: (d) {
+                final px = d.localPosition.dx;
+                final py = d.localPosition.dy;
 
-          return GestureDetector(
-            onPanStart: _onPanStart,
-            onPanUpdate: _onPanUpdate,
-            onPanEnd: _onPanEnd,
-            onTapUp: _onTapUp,
-            onDoubleTap: _onDoubleTap,
-            child: SizedBox.expand(
+                // 像素转米
+                final worldX = px / pixelsPerMeter;
+                final worldY = py / pixelsPerMeter;
+
+                setState(() {
+                  _dragPointWorld = Vector2(worldX, worldY);
+                  _dragPointScreen = Vector2(px, py);
+                });
+              },
+              onPanEnd: (_) {
+                if (_dragPointWorld != null) {
+                  final bird = world.activeBird;
+                  if (bird != null) {
+                    final slingAnchor = world.slingshotPos;
+                    final force = (slingAnchor - _dragPointWorld!) * SlingConsts.slingPower;
+                    bird.launch(force);
+                    world.camCtrl.followBird(bird.body);
+                  }
+                  setState(() {
+                    _dragPointWorld = null;
+                    _dragPointScreen = null;
+                  });
+                }
+              },
+              onTap: () {
+                final bird = world.activeBird;
+                bird?.onTapSkill();
+              },
               child: CustomPaint(
-                painter: _painter,
-                isComplex: true,
-                willChange: true,
+                foregroundPainter: _SlingPainter(
+                  world: world,
+                  dragPoint: _dragPointWorld,
+                ),
+                child: GameWidget(game: world),
               ),
             ),
-          );
-        }),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: Row(
+                children: [
+                  _hudChip(Icons.timer, '${_timeLeft}s'),
+                  const SizedBox(width: 8),
+                  ElevatedButton(onPressed: _restart, child: const Text('Restart')),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const MenuPage()),
+                            (r) => false,
+                      );
+                    },
+                    child: const Text('Home'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hudChip(IconData icon, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFF263238),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(text, style: const TextStyle(color: Colors.white)),
+        ],
       ),
     );
   }
 }
 
-/// ====================== 画笔（带相机） ======================
+class _SlingPainter extends CustomPainter {
+  final AngryWorld world;
+  final Vector2? dragPoint;
 
-class _GamePainter extends CustomPainter {
-  final GameWorld world;
-
-  Rect? nextButtonRect;
-  Rect? homeButtonRect;
-
-  _GamePainter(this.world);
+  _SlingPainter({required this.world, this.dragPoint});
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 背景（不受相机缩放影响）
-    final bg = Paint()..color = const Color(0xFF0F1114);
-    canvas.drawRect(Offset.zero & size, bg);
+    final ppm = pixelsPerMeter;
+    final slingAnchor = world.slingshotPos;
+    final anchorPx = Offset(slingAnchor.x * ppm, slingAnchor.y * ppm);
 
-    // 相机变换：world -> screen
-    canvas.save();
-    canvas.translate(-world.cameraOffset.x * world.cameraScale, -world.cameraOffset.y * world.cameraScale);
-    canvas.scale(world.cameraScale, world.cameraScale);
-
-    // 地面（世界）
-    final ground = Paint()..color = const Color(0xFF1E2228);
-    canvas.drawRect(Rect.fromLTWH(0, size.height - 40, world.world.right, 40), ground);
-
-    // 弹弓 & 轨迹（世界）
-    _drawSling(canvas);
-    _drawTrajectory(canvas);
-
-    // 物体（世界）
-    _drawObstacles(canvas);
-    _drawBeams(canvas);
-    _drawPigs(canvas);
-    _drawBirds(canvas);
-    _drawParticles(canvas);
-
-    canvas.restore();
-
-    // HUD（屏幕坐标）
-    _drawHud(canvas, size);
-
-    // 非 playing 状态时显示按钮（屏幕坐标）
-    if (world.status != LevelStatus.playing) {
-      const w = 120.0, h = 44.0, gap = 16.0;
-      final y = 24.0;
-      homeButtonRect = Rect.fromLTWH(24.0, y, w, h);
-      nextButtonRect = Rect.fromLTWH(24.0 + w + gap, y, w, h);
-      _drawButton(canvas, homeButtonRect!, 'Home');
-      _drawButton(canvas, nextButtonRect!, 'Restart');
-    } else {
-      nextButtonRect = null;
-      homeButtonRect = null;
-    }
-  }
-
-  // ———— 世界绘制 ————
-  void _drawSling(Canvas canvas) {
-    final anchor = world.slingAnchor;
     final paint = Paint()
-      ..color = const Color(0xFF6D4C41)
-      ..strokeWidth = 4
-      ..style = PaintingStyle.stroke;
-    canvas.drawCircle(Offset(anchor.x, anchor.y), 6, Paint()..color = const Color(0xFF8D6E63));
+      ..color = Colors.brown
+      ..strokeWidth = 3;
 
-    if (world.dragging) {
-      final band = Paint()
-        ..color = const Color(0xFFFFA726)
-        ..strokeWidth = 3;
-      final bp = world.bandPoint;
-      canvas.drawLine(Offset(anchor.x, anchor.y), Offset(bp.x, bp.y), band);
-    }
-  }
+    // 橡皮筋
+    if (dragPoint != null) {
+      final dragPx = Offset(dragPoint!.x * ppm, dragPoint!.y * ppm);
+      canvas.drawLine(anchorPx + const Offset(-10, -40), dragPx, paint);
+      canvas.drawLine(anchorPx + const Offset(10, -40), dragPx, paint);
 
-  void _drawTrajectory(Canvas canvas) {
-    if (world.previewPoints.isEmpty) return;
-    final p = Paint()..color = const Color(0xFF90CAF9);
-    for (final v in world.previewPoints) {
-      canvas.drawCircle(Offset(v.x, v.y), 2, p);
-    }
-  }
-
-  void _drawBirds(Canvas canvas) {
-    for (final b in world.birds) {
-      final alpha = (b.opacity.clamp(0.0, 1.0) * 255).toInt();
-      final paint = Paint()..color = Color.fromARGB(alpha, 0x4C, 0xAF, 0x50);
-      canvas.drawCircle(Offset(b.pos.x, b.pos.y), b.radius, paint);
-      canvas.drawCircle(
-        Offset(b.pos.x, b.pos.y),
-        b.radius,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.black.withOpacity(0.25),
+      // 辅助线
+      final points = TrajectoryHelper.predict(
+        dragPoint!,
+        slingAnchor,
+        1 / 60,
       );
+      final dotPaint = Paint()..color = Colors.yellow;
+      for (final p in points) {
+        canvas.drawCircle(
+          Offset(p.x * ppm, p.y * ppm),
+          2,
+          dotPaint,
+        );
+      }
     }
-  }
-
-  void _drawPigs(Canvas canvas) {
-    for (final p in world.pigs) {
-      final alpha = (p.opacity.clamp(0.0, 1.0) * 255).toInt();
-      final paint = Paint()..color = Color.fromARGB(alpha, 0xF4, 0x43, 0x36);
-      canvas.drawCircle(Offset(p.pos.x, p.pos.y), p.radius, paint);
-      canvas.drawCircle(
-        Offset(p.pos.x, p.pos.y),
-        p.radius,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.black.withOpacity(0.25),
-      );
-    }
-  }
-
-  void _drawObstacles(Canvas canvas) {
-    for (final o in world.obstacles) {
-      final alpha = (o.opacity.clamp(0.0, 1.0) * 255).toInt();
-      final rectPaint = Paint()..color = Color.fromARGB(alpha, 0x8D, 0x6E, 0x63);
-      final left = o.pos.x - o.halfSize.x;
-      final top = o.pos.y - o.halfSize.y;
-      final r = Rect.fromLTWH(left, top, o.halfSize.x * 2, o.halfSize.y * 2);
-      canvas.drawRect(r, rectPaint);
-      canvas.drawRect(
-        r,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.black.withOpacity(0.25),
-      );
-    }
-  }
-
-  void _drawBeams(Canvas canvas) {
-    for (final b in world.beams) {
-      final alpha = (b.opacity.clamp(0.0, 1.0) * 255).toInt();
-      final paint = Paint()..color = Color.fromARGB(alpha, 0xA1, 0x88, 0x7F);
-
-      canvas.save();
-      canvas.translate(b.pos.x, b.pos.y);
-      canvas.rotate(b.angle);
-      final r = Rect.fromCenter(
-        center: Offset.zero,
-        width: b.halfSize.x * 2,
-        height: b.halfSize.y * 2,
-      );
-      canvas.drawRect(r, paint);
-      canvas.drawRect(
-        r,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = Colors.black.withOpacity(0.25),
-      );
-      canvas.restore();
-    }
-  }
-
-  void _drawParticles(Canvas canvas) {
-    if (world.particles.isEmpty) return;
-    final p = Paint()..color = const Color(0xFFFFF59D);
-    for (final pr in world.particles) {
-      final a = ((pr.life.clamp(0.0, 1.0)) * 255).toInt();
-      p.color = p.color.withAlpha(a);
-      canvas.drawCircle(Offset(pr.pos.x, pr.pos.y), 2, p);
-    }
-  }
-
-  // ———— HUD / Buttons（屏幕坐标） ————
-  void _drawHud(Canvas canvas, Size size) {
-    final style = const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w600);
-    final tp = TextPainter(
-      text: TextSpan(
-        text:
-        'Score: ${world.score}   Balls: ${world.ballsLeft}/${world.ballsPerLevel}   Time: ${world.timeLeft.toStringAsFixed(1)}s',
-        style: style,
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: size.width);
-    tp.paint(canvas, const Offset(16, 60));
-  }
-
-  void _drawButton(Canvas canvas, Rect r, String text) {
-    final btn = Paint()..color = const Color(0xFF2A3139);
-    final border = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..color = const Color(0xFF3A424C);
-    canvas.drawRRect(RRect.fromRectAndRadius(r, const Radius.circular(8)), btn);
-    canvas.drawRRect(RRect.fromRectAndRadius(r, const Radius.circular(8)), border);
-
-    final tp = TextPainter(
-      text: TextSpan(text: text, style: const TextStyle(color: Colors.white, fontSize: 14)),
-      textDirection: TextDirection.ltr,
-    )..layout(maxWidth: r.width - 12);
-    final off = Offset(r.left + (r.width - tp.width) / 2, r.top + (r.height - tp.height) / 2);
-    tp.paint(canvas, off);
   }
 
   @override
-  bool shouldRepaint(covariant _GamePainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

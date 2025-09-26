@@ -1,27 +1,31 @@
-// trajectory_helper.dart
-import 'physics.dart';
+import 'package:flame_forge2d/flame_forge2d.dart';
 import 'consts.dart';
 
 class TrajectoryHelper {
-  List<Vec2> predict({
-    required Vec2 release,
-    required Vec2 slingAnchor,
-    required double avgDt,
-    int steps = 160,
-  }) {
-    final pts = <Vec2>[];
-    final dt = avgDt.clamp(1 / 120, 1 / 30);
+  static List<Vector2> predict(
+      Vector2 release,
+      Vector2 slingAnchor,
+      double dt, {
+        int steps = 90,
+      }) {
+    final points = <Vector2>[];
+    var pos = Vector2.copy(release);
+    var vel = (release - slingAnchor) * -SlingConsts.slingPower;
 
-    Vec2 pos = release;
-    Vec2 vel = (release - slingAnchor) * -SlingConsts.slingPower;
-    vel.clampLength(SlingConsts.maxSpeed);
+    // 限制最大速度
+    if (vel.length > SlingConsts.maxSpeed) {
+      vel.normalize();
+      vel.scale(SlingConsts.maxSpeed);
+    }
 
     for (int i = 0; i < steps; i++) {
-      vel = vel + SlingConsts.gravity * dt;
-      pos = pos + vel * dt;
-      vel.clampLength(SlingConsts.maxSpeed);
-      if (i % 2 == 0) pts.add(pos);
+      vel += SlingConsts.gravity * dt;
+      pos += vel * dt;
+
+      if (i % 2 == 0) {
+        points.add(Vector2.copy(pos));
+      }
     }
-    return pts;
+    return points;
   }
 }

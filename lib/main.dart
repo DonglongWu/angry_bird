@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'menu.dart';
 
-void main() => runApp(const AngryBirdApp());
+void main() {
+  runApp(const AngryBirdApp());
+}
 
 class AngryBirdApp extends StatelessWidget {
   const AngryBirdApp({super.key});
@@ -9,14 +11,10 @@ class AngryBirdApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Angry Birds Clone',
+      theme: ThemeData.dark(),
       debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF111318),
-        textButtonTheme: TextButtonThemeData(
-          style: TextButton.styleFrom(foregroundColor: Colors.white),
-        ),
-      ),
-      home: const MenuPage(),
+      home: const MenuPage(), // 先进入主菜单
     );
   }
 }

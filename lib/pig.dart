@@ -1,32 +1,80 @@
-// pig.dart
-import 'dart:math' as math;
-import 'physics.dart';
+import 'dart:ui';
+import 'package:flame/components.dart';
+import 'package:flame_forge2d/flame_forge2d.dart';
 
-class Pig extends CircleBody {
-  bool alive = true;
-  double opacity = 1.0;
+import 'world.dart';
+import 'consts.dart';
+import 'bird.dart';
+import 'obstacle.dart';
 
-  Pig({
-    Vec2? pos,
-    Vec2? center,
-    required double radius,
-    double mass = 1.0,
-    Vec2? vel,
-    Vec2? acc,
-  }) : super(
-    pos: (pos ?? center)!,
-    radius: radius,
-    mass: mass,
-    vel: vel ?? Vec2(0, 0),
-    acc: acc ?? Vec2(0, 0),
-  );
+class Pig extends BodyComponent<AngryWorld>
+    with HasGameRef<AngryWorld>, ContactCallbacks {
+  final Vector2 spawnPos;
+  final double radius;
 
-  void markDead() => alive = false;
+  double hp;
+  bool dead = false;
 
-  bool tickDeath(double dt, double duration) {
-    if (alive) return false;
-    if (duration <= 0) { opacity = 0; return true; }
-    opacity = (opacity - dt / duration).clamp(0.0, 1.0);
-    return opacity <= 0.0;
+  Pig({required this.spawnPos, this.radius = 0.4, this.hp = 50});
+
+  @override
+  Body createBody() {
+    final shape = CircleShape()..radius = radius;
+
+    final fixtureDef = FixtureDef(
+      shape,
+      density: 1.0,
+      friction: 0.5,
+      restitution: 0.2,
+    );
+
+    final bodyDef = BodyDef(
+      type: BodyType.dynamic,
+      position: spawnPos,
+      linearDamping: 1.2,
+      angularDamping: 2.5,
+    );
+
+    final b = world.createBody(bodyDef)..createFixture(fixtureDef);
+    b.userData = this;
+    return b;
+  }
+
+  void takeDamage(double damage) {
+    if (dead) return;
+    hp -= damage;
+
+    if (hp <= 0) {
+      dead = true;
+      _onDeath();
+    }
+  }
+
+  @override
+  void beginContact(Object other, Contact contact) {
+    if (dead) return;
+    if (other is Bird) {
+      takeDamage(other.impactPower);
+    } else if (other is Obstacle) {
+      takeDamage(15);
+    }
+  }
+
+  void _onDeath() {
+    removeFromParent();
+    gameRef.addScore(100);
+  }
+
+  @override
+  void render(Canvas canvas) {
+    final paint = Paint()..color = dead ? const Color(0xFF555555) : const Color(0xFF00FF00);
+    final px = body.position.x * pixelsPerMeter;
+    final py = body.position.y * pixelsPerMeter;
+
+    canvas.drawCircle(
+      Offset(px, py),
+      radius * pixelsPerMeter,
+      paint,
+    );
   }
 }

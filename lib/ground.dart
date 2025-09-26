@@ -6,11 +6,10 @@ class Ground extends BodyComponent {
 
   @override
   Body createBody() {
-    // 半宽=50，半高=0.5 的“厚地面”
     final shape = PolygonShape()..setAsBoxXY(50, 0.5);
     final bodyDef = BodyDef()
       ..type = BodyType.static
-      ..position = Vector2(0, y);
+      ..position = Vector2(0, 0);
     final body = world.createBody(bodyDef);
     body.createFixtureFromShape(shape);
     return body;
